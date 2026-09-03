@@ -1,7 +1,8 @@
 # TONFORGE
 
-pip install tonutils cryptography
-python tonforge.py
+Установка - pip install tonutils cryptography
+
+Запуск - python tonforge.py
 
 🇷🇺 Русский
 TONFORGE — консольный менеджер кошельков TON и USDT
