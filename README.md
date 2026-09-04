@@ -4,50 +4,32 @@
 > ## TONFORGE v0.8.0 Beta
 
 **📜 Transaction History**
+Transactions are now displayed in 2 lines with full addresses.
+Transaction details clearly show sender and recipient.
+Friendly and raw 0:... addresses are displayed.
+7 transactions per page with pagination.
+USD₮ is automatically displayed as USDT.
 
-History entries now use 2 lines per transaction.
-Full friendly addresses are displayed.
-Transaction details now clearly show Sender and Recipient.
-Both friendly and raw 0:... addresses are displayed.
-Wallet names are shown when the address belongs to a wallet from the vault.
-History now displays 7 transactions per page.
-Terminal frame width adapts to the available space (84–110 columns).
-USD₮ from TonAPI is normalized to USDT.
-
-**🌐 Language Support**
-
+**🌐 Language**
 Added [11] Language / Язык.
-The entire interface can now be switched between Russian and English.
-Translated 259 user-facing strings, including menus, screens, prompts, warnings, wallet statuses, transaction history, confirmations, and errors.
-Translation coverage: 100%.
-All 267 translation pairs have matching placeholders such as {n}, {name}, etc.
-Selected language is saved in tonforge.config.json and restored automatically on the next launch.
+Full interface is available in Russian and English.
+259 strings translated with 100% coverage.
+Language preference is saved in tonforge.config.json.
 
 **🖥️ Interface**
+Frame width limited to 96 columns.
+Removed unnecessary empty space for a more compact interface.
 
-Reduced the maximum terminal frame width to 96 columns.
-Removed the unnecessary empty line at the bottom of the interface.
-The interface is now more compact in both Russian and English modes.
-
-**🔐 Vault Compatibility**
-
-The wallets.vault format has not changed.
+**🔐 Vault**
+wallets.vault format has not changed.
 Existing wallets and passwords remain fully compatible.
-No migration is required.
 Startup remains unchanged:
 python tonforge.py
 
 **✅ Validation**
 
-py_compile ✓
-Typegen ✓
-TypeScript check ✓
-Build ✓
-Server restart ✓
-HTTP response 200 ✓
-Language option [11] verified ✓
+py_compile ✓ · Typegen ✓ · TSC ✓ · Build ✓ · HTTP 200 ✓
 
-Status: transaction history, bilingual interface, terminal layout, and vault compatibility have been updated and verified.
 
 
 > [!IMPORTANT]
