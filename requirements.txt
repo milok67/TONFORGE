@@ -1,4 +1,0 @@
-ton-core
-tonutils
-cryptography
-bitarray
