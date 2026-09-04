@@ -28,6 +28,14 @@ import warnings
 from datetime import datetime
 from decimal import ROUND_DOWN, Decimal, InvalidOperation
 
+# requests — единственная не-tonutils сетевая зависимость: используется только
+# для tonapi.io/v2/accounts/{addr}/events, который отдаёт УЖЕ РАСШИФРОВАННУЮ
+# историю входящих/исходящих переводов (кто, сколько, кому). tonutils.get_transactions()
+# отдаёт только сырые BOC транзакций, разбирать их вручную под TON+jetton-переводы —
+# отдельная большая и рискованная для точности денежных сумм задача, поэтому для
+# истории транзакций используется публичный индексатор, а не низкоуровневый парсинг.
+import requests
+
 if sys.version_info < (3, 9):
     sys.exit("Нужен Python 3.9 или новее")
 
@@ -52,14 +60,17 @@ BATCH_SIZE        = 10          # сколько кошельков создав
 NAME_PREFIX       = "worker"   # имена: worker-01, worker-02, …
 VAULT_FILE        = "wallets.vault"  # файл-хранилище seed-фраз
 ENCRYPT_VAULT     = True       # шифровать хранилище паролем (нужен пакет cryptography)
-JETTON_GAS_TON    = 0.00       # TON, прикладываемые к переводу USDT (излишек вернётся)
+JETTON_GAS_TON    = 0.05       # TON, прикладываемые к переводу USDT (излишек вернётся)
 SWEEP_RESERVE_TON = 0       # сколько TON оставлять при сборе (0 = забрать всё)
 CONFIRM_SENDS     = True       # спрашивать подтверждение перед каждой отправкой
 EXPLORER          = "tonviewer"  # tonviewer | tonscan
 ROWS_PER_PAGE     = 15          # строк списка на одной странице
+TONAPI_API_KEY    = ""          # ключ tonapi.io (необязательно, поднимает лимиты)
+TX_HISTORY_LIMIT  = 30          # сколько последних событий запрашивать для истории
 
 # ═══════════════════════ КОНСТАНТЫ ═══════════════════════
 IS_TESTNET = NETWORK == "testnet"
+TONAPI_BASE = "https://testnet.tonapi.io" if IS_TESTNET else "https://tonapi.io"
 USDT_MASTER = (
     "kQB0ZYUL5M3KfrW0tSnwdFO1nC-BQHC2gcZl-WaF2on_USDT"
     if IS_TESTNET
@@ -67,7 +78,12 @@ USDT_MASTER = (
 )
 USDT_DECIMALS = 6
 TON_DECIMALS = 9
-MIN_TON_FOR_JETTON = to_nano(JETTON_GAS_TON) + to_nano(0.01)
+# не даём этой величине провалиться ниже разумного порога, даже если
+# кто-то поменяет JETTON_GAS_TON на 0 в настройках
+MIN_TON_FOR_JETTON = max(to_nano(JETTON_GAS_TON) + to_nano(0.01), to_nano(0.05))
+# отдельный, более строгий порог для массового сбора (см. screen_sweep):
+# там за одной операцией часто следует ещё и перевод TON, нужен запас побольше
+MIN_SAFE_JETTON_SWEEP = to_nano(0.1)
 WALLET_CLASSES = {"v3r2": WalletV3R2, "v4r2": WalletV4R2, "v5r1": WalletV5R1}
 STATE_RU = {
     "nonexist": "новый",
@@ -144,6 +160,107 @@ def explorer_link(kind, value):
         return f"{base}/{'address' if kind == 'address' else 'tx'}/{value}"
     base = "testnet.tonviewer.com" if IS_TESTNET else "tonviewer.com"
     return f"{base}/{value}" if kind == "address" else f"{base}/transaction/{value}"
+
+
+# ═══════════════════════ ИСТОРИЯ ТРАНЗАКЦИЙ ═══════════════════════
+# Используем публичный REST tonapi.io/v2/accounts/{addr}/events — он отдаёт
+# готовые, уже расшифрованные "actions" (TonTransfer / JettonTransfer) с суммой,
+# отправителем и получателем, а не сырые BOC, которые пришлось бы парсить
+# вручную. Официальная документация tonapi.io прямо предупреждает: "actions
+# can be changed at any time" — это удобный слой для показа человеку, а не
+# гарантированно стабильный контракт API. Для сверки всегда есть ссылка на
+# блок-эксплорер в деталях транзакции.
+async def fetch_account_events(raw_address, limit=TX_HISTORY_LIMIT):
+    def _do():
+        headers = {"Authorization": f"Bearer {TONAPI_API_KEY}"} if TONAPI_API_KEY else {}
+        r = requests.get(
+            f"{TONAPI_BASE}/v2/accounts/{raw_address}/events",
+            params={"limit": limit},
+            headers=headers,
+            timeout=15,
+        )
+        r.raise_for_status()
+        return r.json()
+
+    return await asyncio.to_thread(_do)
+
+
+def _tx_from_ton_transfer(ev, act, my_raw):
+    d = act.get("TonTransfer") or {}
+    sender = (d.get("sender") or {}).get("address")
+    recipient = (d.get("recipient") or {}).get("address")
+    amount_nano = d.get("amount")
+    if sender is None or recipient is None or amount_nano is None:
+        return None
+    if sender == my_raw:
+        direction, counterparty = "out", recipient
+    elif recipient == my_raw:
+        direction, counterparty = "in", sender
+    else:
+        return None
+    return {
+        "ts": ev.get("timestamp"),
+        "event_id": ev.get("event_id"),
+        "asset": "TON",
+        "direction": direction,
+        "amount": int(amount_nano) / 1e9,
+        "counterparty": counterparty,
+        "comment": d.get("comment") or None,
+    }
+
+
+def _tx_from_jetton_transfer(ev, act, my_raw):
+    d = act.get("JettonTransfer") or {}
+    jetton = d.get("jetton") or {}
+    symbol = (jetton.get("symbol") or "").upper()
+    if symbol != "USDT":
+        return None  # приложение работает только с TON и USDT
+    sender = (d.get("sender") or {}).get("address")
+    recipient = (d.get("recipient") or {}).get("address")
+    raw_amount = d.get("amount")
+    if sender is None or recipient is None or raw_amount is None:
+        return None
+    decimals = jetton.get("decimals", USDT_DECIMALS)
+    if sender == my_raw:
+        direction, counterparty = "out", recipient
+    elif recipient == my_raw:
+        direction, counterparty = "in", sender
+    else:
+        return None
+    return {
+        "ts": ev.get("timestamp"),
+        "event_id": ev.get("event_id"),
+        "asset": symbol,
+        "direction": direction,
+        "amount": int(raw_amount) / (10 ** decimals),
+        "counterparty": counterparty,
+        "comment": d.get("comment") or None,
+    }
+
+
+def parse_events(raw_json, my_raw_address):
+    """Превращает ответ tonapi.io в плоский список входящих/исходящих
+    переводов TON и USDT. Ошибка в отдельном событии не должна ронять всю
+    историю — такое событие просто пропускается."""
+    txs = []
+    for ev in (raw_json or {}).get("events", []):
+        for act in ev.get("actions", []):
+            if act.get("status") != "ok":
+                continue
+            try:
+                atype = act.get("type")
+                if atype == "TonTransfer":
+                    tx = _tx_from_ton_transfer(ev, act, my_raw_address)
+                elif atype == "JettonTransfer":
+                    tx = _tx_from_jetton_transfer(ev, act, my_raw_address)
+                else:
+                    tx = None
+            except Exception:
+                tx = None
+            if tx is not None:
+                txs.append(tx)
+    txs.sort(key=lambda x: x.get("ts") or 0, reverse=True)
+    return txs
 
 
 # ═══════════════════════ ВВОД ═══════════════════════
@@ -234,9 +351,14 @@ class Vault:
     def file_encrypted(self):
         try:
             with open(self.path, "r", encoding="utf-8") as f:
-                return bool(json.load(f).get("encrypted"))
-        except Exception:
+                data = json.load(f)
+        except FileNotFoundError:
             return False
+        except json.JSONDecodeError as exc:
+            raise VaultLocked(f"файл хранилища повреждён (битый JSON): {exc}")
+        if not isinstance(data, dict):
+            raise VaultLocked("файл хранилища повреждён (неожиданный формат)")
+        return bool(data.get("encrypted"))
 
     @staticmethod
     def _derive(password, salt):
@@ -337,9 +459,26 @@ class App:
     def table_head(self):
         return paint(f"  {'№':>3}  {'имя':<12} {'адрес':<15} {'TON':>10} {'USDT':>10}  состояние", C.GREY)
 
+    def _corrupted_vault_page(self, exc):
+        self.ui.page("хранилище повреждено", [
+            paint("  Не удалось прочитать файл хранилища.", C.RED, C.BOLD),
+            f"  {exc}",
+            "",
+            f"  Файл: {paint(VAULT_FILE, C.BOLD)}",
+            "  Если есть резервная копия файла — восстанови её и запусти снова.",
+            "  Свежее хранилище создастся только если переименовать/удалить этот файл —",
+            "  но тогда старые кошельки останутся недоступны без сохранённых seed-фраз.",
+        ])
+        pause("Enter — выход")
+
     # ---------- вход ----------
     async def boot(self):
-        if ENCRYPT_VAULT or (self.vault.exists() and self.vault.file_encrypted()):
+        try:
+            needs_crypto = ENCRYPT_VAULT or (self.vault.exists() and self.vault.file_encrypted())
+        except VaultLocked as exc:
+            self._corrupted_vault_page(exc)
+            return False
+        if needs_crypto:
             self.ensure_crypto()
         rows = [
             f"  Файл хранилища: {paint(VAULT_FILE, C.BOLD)}",
@@ -347,16 +486,22 @@ class App:
             "",
         ]
         if self.vault.exists():
-            enc = self.vault.file_encrypted()
+            try:
+                enc = self.vault.file_encrypted()
+            except VaultLocked as exc:
+                self._corrupted_vault_page(exc)
+                return False
             rows.append("  Хранилище найдено. " + ("Введи пароль, чтобы расшифровать." if enc else "Открываю…"))
             self.ui.page("вход", rows)
+            pwd = secret("пароль хранилища") if enc else ""
             for attempt in range(3):
-                pwd = secret("пароль хранилища") if enc else ""
                 try:
                     self.wallets, vault_net = self.vault.open(pwd)
                     break
                 except VaultLocked:
-                    print(paint(f"   ✖ неверный пароль ({attempt + 1}/3)", C.RED))
+                    if attempt < 2:
+                        print(paint(f"   ✖ неверный пароль ({attempt + 1}/3)", C.RED))
+                        pwd = secret("попробуй ещё раз")
             else:
                 print(paint("   доступ закрыт\n", C.RED))
                 return False
@@ -414,6 +559,11 @@ class App:
                 self.screen_export()
             elif ch == "9":
                 self.screen_import()
+            elif ch == "10":
+                idx = self.pick_wallet("история транзакций · выбор кошелька",
+                                       "выбери кошелёк, чтобы посмотреть его историю")
+                if idx is not None:
+                    await self.screen_transactions(idx)
             elif ch in ("0", "q", "exit", "выход"):
                 return
             else:
@@ -433,6 +583,7 @@ class App:
             two_col(key(3) + " Обновить балансы", key(8) + " Экспорт адресов в CSV"),
             two_col(key(4) + " Перевод TON", key(9) + " Импорт seed-фразы"),
             two_col(key(5) + " Перевод USDT", key(0) + " Выход"),
+            two_col(key(10) + " История транзакций", ""),
         ]
 
     # ---------- список и карточка ----------
@@ -494,6 +645,7 @@ class App:
                 two_col(key(1) + " Перевести TON", key(4) + " Показать seed-фразу"),
                 two_col(key(2) + " Перевести USDT", key(5) + " Переименовать"),
                 two_col(key(3) + " Обновить баланс", key(6) + " Удалить из хранилища"),
+                two_col(key(7) + " История транзакций", ""),
                 "",
                 paint("  Enter — назад к списку", C.GREY),
             ]
@@ -516,6 +668,8 @@ class App:
             elif ch == "6":
                 if self.delete_wallet(idx):
                     return
+            elif ch == "7":
+                await self.screen_transactions(idx)
             else:
                 self.set_flash("не понял команду", ok=False)
 
@@ -680,15 +834,39 @@ class App:
         except Exception:
             self.set_flash(f"адрес не распознан: {dest[:30]}", ok=False)
             return
+        # Address() уже отклоняет мусорные строки (неверный checksum/формат),
+        # но отдельно проверяем testnet/mainnet-флаг адреса — сети разные,
+        # и отправка не туда потеряет средства безвозвратно.
+        if dest_addr.is_test_only and not IS_TESTNET:
+            self.set_flash("это testnet-адрес, а сейчас сеть mainnet — перевод отменён", ok=False)
+            return
+        if not dest_addr.is_test_only and IS_TESTNET:
+            self.set_flash("это mainnet-адрес, а сейчас сеть testnet — перевод отменён", ok=False)
+            return
         amount_raw = ask(f"сумма {label}").lower()
         comment = ask("комментарий (необязательно)", "")
         send_all = amount_raw == "all"
+
+        # Обязательная проверка баланса прямо перед отправкой: то, что показано
+        # на предыдущем экране, могло устареть (кто-то мог обновить баланс
+        # 10 минут назад или вообще ни разу). Отправка "весь баланс" по старым
+        # цифрам особенно опасна для USDT — используем свежие данные.
+        self.ui.page(f"перевод {label} · проверка баланса", [
+            f"  Кошелёк: {w['name']}  {short(w['address'])}",
+            "  Запрашиваю актуальный баланс перед отправкой…",
+        ])
+        await self.refresh_wallets([idx])
+        w = self.wallets[idx]
+        balance_failed = bool(w.get("error"))
+
         try:
             if asset == "ton":
                 units = None if send_all else to_units(amount_raw, TON_DECIMALS)
             elif send_all:
-                if not w.get("usdt"):
-                    raise ValueError("баланс USDT неизвестен или нулевой — сначала обнови баланс")
+                if w.get("usdt") is None:
+                    raise ValueError("не удалось получить баланс USDT — попробуй ещё раз")
+                if w["usdt"] <= 0:
+                    raise ValueError("баланс USDT нулевой — нечего отправлять")
                 units = int(w["usdt"])
             else:
                 units = to_units(amount_raw, USDT_DECIMALS)
@@ -701,19 +879,21 @@ class App:
             shown = fmt_usdt(units)
         dest_str = dest_addr.to_str(is_bounceable=False)
         warn = []
+        if balance_failed:
+            warn.append("не удалось обновить баланс сейчас — данные ниже могут быть устаревшими")
         if asset == "ton" and units is not None and w.get("ton") is not None and units + to_nano(0.01) > w["ton"]:
             warn.append("на кошельке может не хватить TON с учётом комиссии (~0.01)")
         if asset == "usdt":
             if w.get("usdt") is not None and units > w["usdt"]:
-                warn.append("сумма больше известного баланса USDT")
+                warn.append("сумма больше баланса USDT")
             if w.get("ton") is not None and w["ton"] < MIN_TON_FOR_JETTON:
                 warn.append(f"мало TON на газ: нужно ≥ {fmt_ton(MIN_TON_FOR_JETTON)} TON")
-        if w.get("checked") is None:
-            warn.append("балансы этого кошелька ещё не запрашивались")
         rows = [
             f"  Откуда:      {w['name']}  {short(w['address'])}",
             f"  Куда:        {paint(dest_str, C.CYAN)}",
             f"  Сумма:       {paint(shown + ' ' + label, C.BOLD)}",
+            f"  Баланс сейчас: {fmt_ton(w.get('ton'))} TON · {fmt_usdt(w.get('usdt'))} USDT"
+            + paint("  (только что проверено)" if not balance_failed else "  (проверка не удалась)", C.GREY),
             f"  Комментарий: {comment or '—'}",
             f"  Сеть:        {NETWORK}",
             "",
@@ -751,7 +931,7 @@ class App:
         rows = [
             "  Соберёт средства со ВСЕХ кошельков хранилища на один адрес.",
             f"  Резерв TON на каждом кошельке: {paint(SWEEP_RESERVE_TON, C.BOLD)}  (SWEEP_RESERVE_TON; 0 = забрать всё)",
-            f"  USDT уходят только с кошельков, где есть ≥ {fmt_ton(MIN_TON_FOR_JETTON)} TON на газ.",
+            f"  USDT уходят только с кошельков, где есть ≥ {fmt_ton(MIN_SAFE_JETTON_SWEEP)} TON на газ.",
             "",
             two_col(key(1) + " Только USDT", key(3) + " USDT, затем TON"),
             two_col(key(2) + " Только TON", "Enter — отмена"),
@@ -766,16 +946,26 @@ class App:
         except Exception:
             self.set_flash("адрес не распознан", ok=False)
             return
+        if dest_addr.is_test_only and not IS_TESTNET:
+            self.set_flash("это testnet-адрес, а сейчас сеть mainnet — сбор отменён", ok=False)
+            return
+        if not dest_addr.is_test_only and IS_TESTNET:
+            self.set_flash("это mainnet-адрес, а сейчас сеть testnet — сбор отменён", ok=False)
+            return
         dest_str = dest_addr.to_str(is_bounceable=False)
-        need = any(w.get("checked") is None for w in self.wallets)
-        if need or confirm("обновить балансы перед сбором? (рекомендуется)"):
-            self.ui.page("сбор средств · обновляю балансы", ["  Секунду, запрашиваю актуальные балансы…"])
-            await self.refresh_wallets()
+        # Раньше обновление баланса перед сбором было опциональным вопросом
+        # с ответом по умолчанию "нет" — план мог строиться по устаревшим
+        # цифрам. Сбор списывает средства сразу со всех кошельков, поэтому
+        # свежий баланс обязателен, без права отказаться.
+        self.ui.page("сбор средств · обновляю балансы", [
+            "  Обновляю балансы всех кошельков перед сбором (это обязательный шаг)…",
+        ])
+        await self.refresh_wallets()
         reserve, fee = to_nano(SWEEP_RESERVE_TON), to_nano(0.01)
         plan = []
         for i, w in enumerate(self.wallets):
             ton, usdt = w.get("ton") or 0, w.get("usdt") or 0
-            if what in ("1", "3") and usdt > 0 and ton >= MIN_TON_FOR_JETTON:
+            if what in ("1", "3") and usdt > 0 and ton >= MIN_SAFE_JETTON_SWEEP:
                 plan.append((i, "usdt", usdt))
                 ton -= to_nano(JETTON_GAS_TON)  # считаем консервативно, часть газа вернётся
             if what in ("2", "3"):
@@ -862,21 +1052,122 @@ class App:
             self.set_flash("показ отменён", ok=False)
             return
         words = w["mnemonic"].split()
-        version = w.get("version", WALLET_VERSION)
-        rows = [f"  {paint(w['name'], C.BOLD)}  ·  {version}  ·  {paint(w['address'], C.CYAN)}", ""]
-        for r in range(0, len(words), 4):
-            chunk = words[r:r + 4]
-            rows.append("   " + "".join(
-                f"{paint(str(r + c + 1).rjust(2), C.GREY)} {word:<12}" for c, word in enumerate(chunk)
-            ))
-        rows += [
-            "",
-            paint(f"  При импорте в Tonkeeper / MyTonWallet выбери версию {version}, если адрес не совпал.", C.GREY),
-            paint("  Экран будет очищен после Enter.", C.GREY),
+        try:
+            version = w.get("version", WALLET_VERSION)
+            rows = [f"  {paint(w['name'], C.BOLD)}  ·  {version}  ·  {paint(w['address'], C.CYAN)}", ""]
+            for r in range(0, len(words), 4):
+                chunk = words[r:r + 4]
+                rows.append("   " + "".join(
+                    f"{paint(str(r + c + 1).rjust(2), C.GREY)} {word:<12}" for c, word in enumerate(chunk)
+                ))
+            rows += [
+                "",
+                paint(f"  При импорте в Tonkeeper / MyTonWallet выбери версию {version}, если адрес не совпал.", C.GREY),
+                paint("  Экран будет очищен после Enter.", C.GREY),
+            ]
+            self.ui.page("seed-фраза", rows)
+            pause("Enter — скрыть")
+        finally:
+            # Best-effort очистка: в CPython строки неизменяемы, поэтому это
+            # НЕ гарантия того, что seed-фраза удалена из физической памяти —
+            # интерпретатор мог держать другие копии (в кэше строк, в стеке
+            # вызовов, в истории GC). Реальная защита — короткое время жизни
+            # процесса и то, что экран сразу очищается ниже; полноценное
+            # стирание секретов из памяти в чистом Python не обеспечить.
+            words = None
+            rows = None
+            import gc
+            gc.collect()
+            self.ui.clear()
+
+    # ---------- история транзакций ----------
+    async def screen_transactions(self, idx):
+        w = self.wallets[idx]
+        my_raw = Address(w["address"]).to_str(is_user_friendly=False)
+
+        self.ui.page(f"история транзакций · {w['name']}", [
+            f"  {w['address']}",
+            "  Запрашиваю последние события через tonapi.io…",
+        ])
+        try:
+            raw = await fetch_account_events(my_raw)
+        except Exception as exc:
+            self.ui.page("история транзакций · ошибка", [
+                paint(f"  Не удалось получить историю: {str(exc)[:70]}", C.RED),
+                "",
+                paint("  Возможные причины: нет сети, лимит запросов tonapi.io,", C.GREY),
+                paint("  либо адрес ещё не разворачивался в сети.", C.GREY),
+            ])
+            pause()
+            return
+
+        txs = parse_events(raw, my_raw)
+        if not txs:
+            self.ui.page(f"история транзакций · {w['name']}", [
+                f"  {w['address']}",
+                "",
+                "  Переводов TON/USDT не найдено (либо их пока не было).",
+                paint(f"  Показаны только последние {TX_HISTORY_LIMIT} событий по кошельку.", C.GREY),
+            ])
+            pause()
+            return
+
+        page_no = 0
+        while True:
+            total = len(txs)
+            pages = max(1, -(-total // ROWS_PER_PAGE))
+            page_no = min(page_no, pages - 1)
+            chunk = txs[page_no * ROWS_PER_PAGE:(page_no + 1) * ROWS_PER_PAGE]
+            rows = [
+                f"  {w['name']}  {short(w['address'])}",
+                paint(f"  показаны последние {min(total, TX_HISTORY_LIMIT)} событий", C.GREY),
+                "",
+            ]
+            for n, tx in enumerate(chunk, page_no * ROWS_PER_PAGE + 1):
+                rows.append(self.tx_row(n, tx))
+            rows += ["", paint("  номер — детали · n/p — листать · Enter — назад", C.GREY)]
+            self.ui.page(f"история транзакций · стр. {page_no + 1}/{pages}", rows)
+            ch = ask("выбор").lower()
+            if ch == "":
+                return
+            if ch == "n":
+                page_no = min(page_no + 1, pages - 1)
+            elif ch == "p":
+                page_no = max(page_no - 1, 0)
+            elif ch.isdigit() and 1 <= int(ch) <= total:
+                self.screen_transaction_detail(txs[int(ch) - 1], w)
+            else:
+                self.set_flash("не понял команду", ok=False)
+
+    @staticmethod
+    def tx_row(n, tx):
+        when = datetime.fromtimestamp(tx["ts"]).strftime("%d.%m %H:%M") if tx.get("ts") else "  ?  "
+        sign = "+" if tx["direction"] == "in" else "-"
+        color = C.LIME if tx["direction"] == "in" else C.RED
+        prec = 4 if tx["asset"] == "TON" else 2
+        amount_str = f"{sign}{tx['amount']:.{prec}f} {tx['asset']}"
+        return f"  {n:>3}  {when:<12} " + paint(f"{amount_str:>16}", color) + f"  {short(tx['counterparty'])}"
+
+    def screen_transaction_detail(self, tx, w):
+        color = C.LIME if tx["direction"] == "in" else C.RED
+        sign = "+" if tx["direction"] == "in" else "-"
+        prec = 4 if tx["asset"] == "TON" else 2
+        when = datetime.fromtimestamp(tx["ts"]).strftime("%Y-%m-%d %H:%M:%S") if tx.get("ts") else "неизвестно"
+        rows = [
+            f"  Кошелёк:     {w['name']}  {short(w['address'])}",
+            "  Направление: " + paint("входящая (получено)" if tx["direction"] == "in" else "исходящая (отправлено)", color),
+            f"  Сумма:       " + paint(f"{sign}{tx['amount']:.{prec}f} {tx['asset']}", color, C.BOLD),
+            f"  Контрагент:  {tx['counterparty']}",
+            f"  Время:       {when}",
         ]
-        self.ui.page("seed-фраза", rows)
-        pause("Enter — скрыть")
-        self.ui.clear()
+        if tx.get("comment"):
+            rows.append(f"  Комментарий: {tx['comment']}")
+        rows.append("")
+        if tx.get("event_id"):
+            rows.append(f"  {explorer_link('tx', tx['event_id'])}")
+        rows.append(paint("  Свежие детали всегда можно сверить в блок-эксплорере по ссылке выше.", C.GREY))
+        self.ui.page("детали транзакции", rows)
+        pause()
 
     # ---------- экспорт / импорт ----------
     def screen_export(self):
@@ -898,10 +1189,31 @@ class App:
                        fmt_ton(w.get("ton")), fmt_usdt(w.get("usdt"))]
                 wr.writerow(row + ([w["mnemonic"]] if with_seed else []))
         if with_seed:
-            try:
-                os.chmod(fname, 0o600)
-            except OSError:
-                pass
+            chmod_ok = False
+            if os.name != "nt":
+                try:
+                    os.chmod(fname, 0o600)
+                    chmod_ok = True
+                except OSError:
+                    pass
+            rows = [
+                f"  Файл {paint(fname, C.BOLD)} содержит seed-фразы в открытом виде.",
+                "",
+            ]
+            if os.name == "nt":
+                rows.append(paint("  Windows не поддерживает unix-права доступа (chmod) — файл", C.YEL))
+                rows.append(paint("  доступен всем, у кого есть доступ к этой папке/диску.", C.YEL))
+            elif not chmod_ok:
+                rows.append(paint("  Не удалось ограничить права доступа к файлу (chmod не сработал).", C.YEL))
+            else:
+                rows.append(paint("  Права доступа ограничены (chmod 600, только текущий пользователь).", C.GREY))
+            rows += [
+                "",
+                paint("  Рекомендация: перенеси файл в зашифрованное хранилище (или на офлайн-", C.GREY),
+                paint("  носитель) и удали его отсюда сразу после того, как он больше не нужен.", C.GREY),
+            ]
+            self.ui.page("экспорт с seed-фразами", rows)
+            pause()
         self.set_flash(f"экспортировано {len(self.wallets)} кошельков → {fname}")
 
     def screen_import(self):
