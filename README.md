@@ -1,6 +1,29 @@
 <img width="1960" height="520" alt="tonforge-horizontal (1)" src="https://github.com/user-attachments/assets/020829b6-ba79-4c65-a070-0c3fe9bfe834" />
 
 > [!IMPORTANT]
+> ## TONFORGE v0.8.5 Beta
+
+**🐛 Bug Fixes** 
+Fixed text overflowing outside the terminal frame.
+Fixed incorrect rendering of long colored (ANSI) lines.
+Improved raw address and TonViewer link display on narrow terminals.
+Fixed potential terminal issues caused by untrusted transaction comments.
+
+**⚡ Improvements**
+Added fit_ansi() for safe text truncation while preserving ANSI colors.
+Increased PBKDF2 from 390,000 → 600,000 iterations for new vaults.
+Added compatibility with existing vaults using 390,000 iterations.
+Improved vault file protection with 0600 permissions.
+Improved CSV formula escaping and export overwrite protection.
+
+**🔐 Security**
+Added protection against ANSI injection through transaction comments.
+Existing wallets, passwords, and wallets.vault files remain compatible.
+
+Status: Bug fixes and security improvements implemented and verified.
+
+
+> [!IMPORTANT]
 > ## TONFORGE v0.8.0 Beta
 <img width="771" height="264" alt="image" src="https://github.com/user-attachments/assets/661fa170-516c-42fb-841f-b60fe42ccb06" />
 <img width="779" height="375" alt="image" src="https://github.com/user-attachments/assets/1812373b-1a28-4af3-bf24-9098c5ea3214" />
