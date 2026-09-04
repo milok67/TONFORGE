@@ -8,8 +8,8 @@
 Запуск - python tonforge.py
 
 # 🇷🇺 Русский
-# TONFORGE — консольный менеджер кошельков TON и USDT
-# TONFORGE — это генератор и библиотека-инструмент на Python, которая превращает набор ползунков в веб-конфигураторе в готовый консольный скрипт для массовой работы с криптокошельками в сети TON (The Open Network). Проект решает задачу управления пулами кошельков для выплат, фарминга, тестирования и собственной автоматизации — без единой строчки собственного кода.
+TONFORGE — консольный менеджер кошельков TON и USDT
+TONFORGE — это генератор и библиотека-инструмент на Python, которая превращает набор ползунков в веб-конфигураторе в готовый консольный скрипт для массовой работы с криптокошельками в сети TON (The Open Network). Проект решает задачу управления пулами кошельков для выплат, фарминга, тестирования и собственной автоматизации — без единой строчки собственного кода.
 
 # Что умеет скрипт:
 
@@ -32,8 +32,8 @@
 Стек: Python 3.9+, tonutils (официальный SDK для TON), cryptography · React 19, TypeScript, Tailwind CSS 4, Framer Motion, Vite.
 
 # 🇬🇧 English
-# TONFORGE — a console wallet manager for TON & USDT
-# TONFORGE is a Python generator toolkit that turns a set of sliders in a web configurator into a ready-to-run console script for managing crypto wallets at scale on the TON blockchain (The Open Network). It covers payout pools, farming setups, testing environments, and personal automation — without writing a single line of your own code.
+TONFORGE — a console wallet manager for TON & USDT
+TONFORGE is a Python generator toolkit that turns a set of sliders in a web configurator into a ready-to-run console script for managing crypto wallets at scale on the TON blockchain (The Open Network). It covers payout pools, farming setups, testing environments, and personal automation — without writing a single line of your own code.
 
 # What the script does:
 
