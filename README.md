@@ -50,7 +50,8 @@ Language option [11] verified ✓
 Status: transaction history, bilingual interface, terminal layout, and vault compatibility have been updated and verified.
 
 
-# TONFORGE v0.7.0 Beta 
+> [!IMPORTANT]
+> ## TONFORGE v0.7.0 Beta
 <img width="644" height="232" alt="image" src="https://github.com/user-attachments/assets/a54070a5-a89d-41c6-8e3a-969ddc87977a" />
 <img width="644" height="266" alt="image" src="https://github.com/user-attachments/assets/0af9d698-57f2-4b92-bef1-d2d33cfae5e9" />
 
@@ -68,7 +69,8 @@ Status: transaction history, bilingual interface, terminal layout, and vault com
 * **🛡️ Verification:** tonutils APIs and implemented methods were checked against the actual installed library; fixes that did not match the real API were not applied.
 * **Status:** TON/USDT transfers, balance refresh, mass sweep, and transaction history have been updated and verified.
 
-# TONFORGE v0.5.0 Beta
+> [!IMPORTANT]
+> ## TONFORGE v0.5.0 Beta
 <img width="642" height="230" alt="image" src="https://github.com/user-attachments/assets/0f331dcf-2f6e-4fa6-abcd-91b5fa438e5a" />
 <img width="646" height="402" alt="image" src="https://github.com/user-attachments/assets/c7059bdf-bffb-4587-9461-f1e9f24b02aa" />
 
