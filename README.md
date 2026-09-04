@@ -1,6 +1,6 @@
 <img width="1960" height="520" alt="tonforge-horizontal (1)" src="https://github.com/user-attachments/assets/020829b6-ba79-4c65-a070-0c3fe9bfe834" />
->[!IMPORTANT]
->TONFORGE v0.8.0 Beta 
+> [!IMPORTANT]
+> TONFORGE v0.8.0 Beta 
 **📜 Transaction History**
 
 History entries now use 2 lines per transaction.
