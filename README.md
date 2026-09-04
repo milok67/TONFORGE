@@ -1,9 +1,7 @@
 
 <img width="1960" height="520" alt="tonforge-horizontal (1)" src="https://github.com/user-attachments/assets/020829b6-ba79-4c65-a070-0c3fe9bfe834" />
-
-Установка - pip install tonutils cryptography
-
-Запуск - python tonforge.py
+* Установка - pip install tonutils cryptography
+* Запуск - python tonforge.py
 
 # TONFORGE v1.1.0 Update
 <img width="644" height="232" alt="image" src="https://github.com/user-attachments/assets/a54070a5-a89d-41c6-8e3a-969ddc87977a" />
