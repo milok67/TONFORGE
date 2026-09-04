@@ -14,25 +14,15 @@ Update: improved transaction security, balance verification, and added transacti
 What’s Changed
 
 🔐 Vault: improved password handling and corrupted JSON error handling.
-
 💰 Balances: balances are now automatically refreshed before sending TON/USDT.
-
 📤 Transfers: sending operations use fresh balance data immediately before confirmation.
-
 🔄 Mass Sweep: all wallet balances are now automatically refreshed before building the sweep plan.
-
 ⛽ Gas: JETTON_GAS_TON = 0.05 TON; a higher safety threshold of 0.1 TON was added for mass USDT sweeps.
-
 🌐 Network: uses Address.is_test_only instead of detecting the network by address prefix.
-
 🧹 Seed Cleanup: added the maximum practical memory cleanup available in Python with gc.collect(), with the limitations explicitly documented.
-
 📜 Transaction History: added TON and USDT transaction history using TonAPI.
-
 🟢🔴 Direction: incoming and outgoing transactions are displayed with signs and color indicators.
-
 📄 History Details: pagination, amount, direction, counterparty address, timestamp, comment, and blockchain explorer link.
-
 🛡️ Verification: tonutils APIs and implemented methods were checked against the actual installed library; fixes that did not match the real API were not applied.
 Status: TON/USDT transfers, balance refresh, mass sweep, and transaction history have been updated and verified.
 
