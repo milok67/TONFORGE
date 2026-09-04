@@ -67,3 +67,6 @@ TONFORGE ориентирован на разработчиков и польз�
 TONFORGE is designed for developers and users who need to manage multiple TON wallets from a single command-line application.
 
 > Use this project only with wallets and funds you own or in environments where you have proper authorization.
+
+1) pip install tonutils cryptography
+2) python tonforge.py
