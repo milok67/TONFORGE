@@ -20,7 +20,6 @@ Improved CSV formula escaping and export overwrite protection.
 Added protection against ANSI injection through transaction comments.
 Existing wallets, passwords, and wallets.vault files remain compatible.
 
-Status: Bug fixes and security improvements implemented and verified.
 
 
 > [!IMPORTANT]
