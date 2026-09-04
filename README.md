@@ -4,6 +4,7 @@
 > ## TONFORGE v0.8.0 Beta
 
 **📜 Transaction History**
+
 Transactions are now displayed in 2 lines with full addresses.
 Transaction details clearly show sender and recipient.
 Friendly and raw 0:... addresses are displayed.
@@ -11,16 +12,19 @@ Friendly and raw 0:... addresses are displayed.
 USD₮ is automatically displayed as USDT.
 
 **🌐 Language**
+
 Added [11] Language / Язык.
 Full interface is available in Russian and English.
 259 strings translated with 100% coverage.
 Language preference is saved in tonforge.config.json.
 
 **🖥️ Interface**
+
 Frame width limited to 96 columns.
 Removed unnecessary empty space for a more compact interface.
 
 **🔐 Vault**
+
 wallets.vault format has not changed.
 Existing wallets and passwords remain fully compatible.
 Startup remains unchanged:
