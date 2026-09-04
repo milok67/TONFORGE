@@ -1,7 +1,7 @@
 <img width="1960" height="520" alt="tonforge-horizontal (1)" src="https://github.com/user-attachments/assets/020829b6-ba79-4c65-a070-0c3fe9bfe834" />
-[!IMPORTANT]
 
-🚀 TONFORGE — Latest Update
+# TONFORGE v0.7.0 Beta 
+**📜 Transaction History**
 
 History entries now use 2 lines per transaction.
 Full friendly addresses are displayed.
@@ -12,7 +12,7 @@ History now displays 7 transactions per page.
 Terminal frame width adapts to the available space (84–110 columns).
 USD₮ from TonAPI is normalized to USDT.
 
-🌐 Language Support
+**🌐 Language Support**
 
 Added [11] Language / Язык.
 The entire interface can now be switched between Russian and English.
@@ -21,13 +21,13 @@ Translation coverage: 100%.
 All 267 translation pairs have matching placeholders such as {n}, {name}, etc.
 Selected language is saved in tonforge.config.json and restored automatically on the next launch.
 
-🖥️ Interface
+**🖥️ Interface**
 
 Reduced the maximum terminal frame width to 96 columns.
 Removed the unnecessary empty line at the bottom of the interface.
 The interface is now more compact in both Russian and English modes.
 
-🔐 Vault Compatibility
+**🔐 Vault Compatibility**
 
 The wallets.vault format has not changed.
 Existing wallets and passwords remain fully compatible.
@@ -35,7 +35,7 @@ No migration is required.
 Startup remains unchanged:
 python tonforge.py
 
-✅ Validation
+**✅ Validation**
 
 py_compile ✓
 Typegen ✓
