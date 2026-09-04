@@ -16,6 +16,21 @@
 #     (выбор хранится в tonforge.config.json рядом со скриптом)
 #   Интерфейс страничный: экран очищается перед каждым шагом,
 #   поэтому в консоли нет бесконечной ленты сообщений.
+# ----------------------------------------------------------------
+#   ЗАЩИТА (кратко):
+#   • хранилище: Fernet (AES-128-CBC + HMAC-SHA256), ключ из PBKDF2-SHA256;
+#     новые хранилища — 600 000 итераций (старые открываются с исходных 390k)
+#   • запись хранилища атомарная через временный файл с правами 0600
+#     с момента создания (нет окна, когда файл читаем другими)
+#   • данные из блокчейна (комментарии переводов) и имена кошельков
+#     проходят sanitize() — вырезаются управляющие символы: защита
+#     терминала от ANSI/OSC-инъекций через чужой «комментарий перевода»
+#   • CSV-экспорт экранирует формульное начало ячеек (= + - @)
+#   • любые строки интерфейса обрезаются по видимой ширине рамки
+#   Ограничение, о котором честно: seed-фразы живут в памяти процесса,
+#   стереть их из чистого Python гарантированно нельзя (см. экран seed),
+#   и офлайн-обладатель файла может перебирать пароль без лимита —
+#   защита от этого только в стойкости самого пароля.
 # ================================================================
 
 import asyncio
@@ -57,6 +72,7 @@ from tonutils.contracts import (
 from tonutils.types import DEFAULT_HTTP_RETRY_POLICY
 
 # ══════════════════════ НАСТРОЙКИ ══════════════════════
+APP_VERSION       = "v0.8.5 beta"    # показывается в шапке каждого окна
 NETWORK           = "mainnet"        # mainnet | testnet
 TONCENTER_API_KEY = ""   # ключ от @toncenter; без ключа ~1 запрос в 1.3 с
 RPS_LIMIT         = 10          # лимит запросов/с — применяется только с ключом
@@ -361,8 +377,8 @@ EN = {
     "Отправитель": "Sender",
     "Получатель": "Recipient",
     "  Событие: ": "  Event:   ",
-    "  Адреса показаны целиком — можно скопировать прямо из консоли (выделить мышью).": "  Addresses are shown in full — you can copy them right from the console (select with the mouse).",
-    "  Свежие детали всегда можно сверить в блок-эксплорере по ссылке выше.": "  Fresh details can always be verified in the block explorer via the link above.",
+    "  Адреса показаны целиком — выделите мышью и скопируйте.": "  Addresses are shown in full — select with the mouse to copy.",
+    "  Детали можно сверить в блок-эксплорере по ссылке выше.": "  Verify them in the block explorer via the link above.",
     "  Время:": "  Time:",
     "  Направление: ": "  Direction: ",
     "  Сумма:       ": "  Amount:    ",
@@ -384,6 +400,8 @@ EN = {
     "  носитель) и удали его отсюда сразу после того, как он больше не нужен.": "  drive) and delete it here as soon as it's no longer needed.",
     "экспорт с seed-фразами": "export with seed phrases",
     "экспортировано {n} кошельков → {f}": "{n} wallets exported → {f}",
+    "файл {f} уже существует — перезаписать?": "file {f} already exists — overwrite it?",
+    "экспорт отменён": "export cancelled",
     # ── импорт ───────────────────────────────────────────────────────
     "импорт seed-фразы": "import seed phrase",
     "  Вставь seed-фразу (24 слова TON или 12/18/24 слова BIP-39) через пробел.": "  Paste a seed phrase (24 TON words or 12/18/24 BIP-39 words) separated by spaces.",
@@ -392,7 +410,7 @@ EN = {
     "импорт отменён: нужно 12/18/24 слова": "import cancelled: 12/18/24 words are required",
     "версия": "version",
     "неизвестная версия": "unknown version",
-    "seed не принят: {e}": "seed rejected: {e}",
+    "seed не принят: проверь слова, их порядок и версию кошелька": "seed rejected: check the words, their order and the wallet version",
     "такой кошелёк уже есть в хранилище": "this wallet is already in the vault",
     "импортирован {name} · {addr}": "imported {name} · {addr}",
     # ── выбор языка ──────────────────────────────────────────────────
@@ -402,7 +420,7 @@ EN = {
     "язык переключён: {l}": "language switched: {l}",
     # ── запуск / выход ───────────────────────────────────────────────
     "WALLET_VERSION должен быть одним из: {v}": "WALLET_VERSION must be one of: {v}",
-    "  TONFORGE · хранилище закрыто, до встречи": "  TONFORGE · vault closed, see you",
+    "хранилище закрыто, до встречи": "vault closed, see you",
     "  прервано (Ctrl+C) — все изменения уже сохранены в хранилище": "  interrupted (Ctrl+C) — all changes are already saved to the vault",
 }
 
@@ -444,6 +462,59 @@ class C:
 
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
+# управляющие символы, включая ESC (0x1b) и DEL — потенциальный канал
+# ANSI/OSC-инъекций в терминал через чужие данные (комментарии переводов)
+CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def sanitize(text, limit=120):
+    """Любая строка ИЗВНЕ (комментарий перевода из блокчейна, имя кошелька
+    из хранилища) перед показом очищается от управляющих символов и
+    укладывается в одну строку. Иначе «чужой» комментарий мог бы
+    перерисовать экран, очистить историю терминала или подсунуть OSC-последовательность."""
+    if not text:
+        return ""
+    clean = CONTROL_RE.sub("", str(text))
+    clean = " ".join(clean.split())
+    return clean[:limit].strip()
+
+
+def csv_safe(v):
+    """Защита от CSV-инъекций: ячейка, начинающаяся с = + - @, в Excel/Sheets
+    исполняется как формула. Экранируем апострофом (кроме отрицательных чисел)."""
+    v = str(v)
+    if v[:1] in ("=", "+", "-", "@") and not re.match(r"^-?\d", v):
+        return "'" + v
+    return v
+
+
+def vis_len(s):
+    return len(ANSI_RE.sub("", s))
+
+
+def fit_ansi(s, width):
+    """Обрезает строку по ВИДИМОЙ ширине рамки, даже если в ней есть
+    ANSI-цвета (escape-последовательности копируются целиком и никогда
+    не разрываются, цвет всегда корректно сбрасывается в конце)."""
+    if vis_len(s) <= width:
+        return s
+    out, visible, i = [], 0, 0
+    while i < len(s) and visible < width - 1:
+        if s[i] == "\x1b":
+            m = ANSI_RE.match(s, i)
+            if not m:
+                break
+            out.append(m.group(0))
+            i = m.end()
+        else:
+            out.append(s[i])
+            visible += 1
+            i += 1
+    out.append("…")
+    if "\x1b" in s:
+        out.append(C.RESET)
+    return "".join(out)
+
 
 def paint(text, *codes):
     return "".join(codes) + str(text) + C.RESET
@@ -451,10 +522,6 @@ def paint(text, *codes):
 
 def key(k):
     return paint(f"[{k}]", C.LIME, C.BOLD)
-
-
-def vis_len(s):
-    return len(ANSI_RE.sub("", s))
 
 
 def pad(s, width):
@@ -570,7 +637,8 @@ def _tx_from_ton_transfer(ev, act, my_raw):
         # полные адреса обеих сторон — для экрана «от кого / кому»
         "from_addr": sender,
         "to_addr": recipient,
-        "comment": d.get("comment") or None,
+        # комментарий — чужие данные прямо из блокчейна: обязательный sanitize
+        "comment": sanitize(d.get("comment")) or None,
     }
 
 
@@ -601,7 +669,7 @@ def _tx_from_jetton_transfer(ev, act, my_raw):
         "counterparty": counterparty,
         "from_addr": sender,
         "to_addr": recipient,
-        "comment": d.get("comment") or None,
+        "comment": sanitize(d.get("comment")) or None,
     }
 
 
@@ -677,16 +745,25 @@ class Screen:
     @staticmethod
     def line(text=""):
         inner = W - 4
-        if vis_len(text) > inner and "\x1b" not in text:
-            text = text[: inner - 1] + "…"
-        print("│ " + pad(text, inner) + " │")
+        # fit_ansi режет ЛЮБУЮ строку (с цветами или без) по видимой ширине —
+        # вылезание за рамку невозможно в принципе
+        print("│ " + pad(fit_ansi(text, inner), inner) + " │")
 
     def page(self, title, body, status=None):
         self.clear()
         print("╭" + "─" * (W - 2) + "╮")
-        left = paint(" TONFORGE", C.BOLD, C.LIME) + paint(" · " + title, C.BOLD)
+        inner = W - 4
+        # бренд с версией присутствует на КАЖДОМ экране и никогда не режется
+        brand = paint(" TONFORGE", C.BOLD, C.LIME) + paint(" " + APP_VERSION, C.GREY)
         right = paint(f"{NETWORK} · " + tr("кошельков: {n}", n=len(self.app.wallets)), C.GREY)
-        gap = " " * max(1, W - 4 - vis_len(left) - vis_len(right))
+        # если места мало — ужимаем именно заголовок страницы, а не версию/сеть
+        room = inner - vis_len(brand) - vis_len(right) - 4
+        if room >= 6:
+            shown = title if len(title) <= room else title[: max(1, room - 1)] + "…"
+            left = brand + paint(" · " + shown, C.BOLD)
+        else:
+            left = brand
+        gap = " " * max(1, inner - vis_len(left) - vis_len(right))
         self.line(left + gap + right)
         print("├" + "─" * (W - 2) + "┤")
         self.line()
@@ -704,15 +781,25 @@ class VaultLocked(Exception):
     pass
 
 
+# PBKDF2-SHA256: 600k — рекомендация OWASP на текущий момент для новых данных.
+# Старые хранилища (без поля kdf_iterations в файле) открываются с исходных
+# 390k — обратная совместимость сохранена, при следующем save() число
+# итераций НЕ меняется, чтобы не инвалидировать старый ключ незаметно.
+KDF_ITERATIONS_NEW = 600_000
+KDF_ITERATIONS_LEGACY = 390_000
+
+
 class Vault:
     """JSON-файл с кошельками. При ENCRYPT_VAULT содержимое шифруется
     Fernet (AES-128-CBC + HMAC-SHA256), ключ выводится из пароля через
-    PBKDF2-SHA256 с 390 000 итераций и случайной солью."""
+    PBKDF2-SHA256 со случайной солью. Запись — атомарно через временный
+    файл, который создаётся сразу с правами 0600."""
 
     def __init__(self, path):
         self.path = path
         self.fernet = None
         self.salt = None
+        self.kdf_iterations = KDF_ITERATIONS_NEW
 
     def exists(self):
         return os.path.exists(self.path)
@@ -730,18 +817,19 @@ class Vault:
         return bool(data.get("encrypted"))
 
     @staticmethod
-    def _derive(password, salt):
+    def _derive(password, salt, iterations):
         from cryptography.fernet import Fernet
         from cryptography.hazmat.primitives import hashes
         from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
-        kdf = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=salt, iterations=390_000)
+        kdf = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=salt, iterations=int(iterations))
         return Fernet(base64.urlsafe_b64encode(kdf.derive(password.encode("utf-8"))))
 
     def create(self, password):
         if ENCRYPT_VAULT:
             self.salt = secrets.token_bytes(16)
-            self.fernet = self._derive(password, self.salt)
+            self.kdf_iterations = KDF_ITERATIONS_NEW
+            self.fernet = self._derive(password, self.salt, self.kdf_iterations)
         self.save([])
 
     def open(self, password):
@@ -750,8 +838,14 @@ class Vault:
         if raw.get("encrypted"):
             from cryptography.fernet import InvalidToken
 
+            # число итераций хранится в самом файле: новые хранилища — 600k,
+            # ранние файлы без этого поля — исходные 390k
+            try:
+                self.kdf_iterations = int(raw.get("kdf_iterations") or KDF_ITERATIONS_LEGACY)
+            except (TypeError, ValueError):
+                self.kdf_iterations = KDF_ITERATIONS_LEGACY
             self.salt = base64.b64decode(raw["salt"])
-            self.fernet = self._derive(password, self.salt)
+            self.fernet = self._derive(password, self.salt, self.kdf_iterations)
             try:
                 payload = json.loads(self.fernet.decrypt(raw["payload"].encode()).decode("utf-8"))
             except InvalidToken:
@@ -764,13 +858,17 @@ class Vault:
         payload = {"wallets": wallets, "saved": datetime.now().isoformat(timespec="seconds")}
         doc = {"format": "tonforge/1", "network": NETWORK, "encrypted": bool(self.fernet)}
         if self.fernet:
+            doc["kdf_iterations"] = self.kdf_iterations
             doc["salt"] = base64.b64encode(self.salt).decode()
             blob = json.dumps(payload, ensure_ascii=False).encode("utf-8")
             doc["payload"] = self.fernet.encrypt(blob).decode()
         else:
             doc["payload"] = payload
         tmp = self.path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
+        # временный файл создаётся СРАЗУ с правами 0600: у обычного open()
+        # между созданием и chmod есть окно, когда файл читаем другими
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(doc, f, ensure_ascii=False, indent=2)
         os.replace(tmp, self.path)
         try:
@@ -884,6 +982,10 @@ class App:
             else:
                 print(paint(tr("   доступ закрыт\n"), C.RED))
                 return False
+            # имена из файла хранилища тоже проходят sanitize(): файл может
+            # быть отредактирован/подменён вручную, а имя выводится в рамку
+            for w in self.wallets:
+                w["name"] = sanitize(w.get("name", ""), 24) or "wallet"
             if vault_net != NETWORK:
                 self.set_flash(tr("внимание: хранилище создано для сети {a}, а сейчас {b}",
                                   a=vault_net, b=NETWORK), ok=False)
@@ -1068,9 +1170,11 @@ class App:
             elif ch == "4":
                 self.screen_seed(idx)
             elif ch == "5":
-                w["name"] = ask(tr("новое имя"), w["name"])[:24]
-                self.save()
-                self.set_flash(tr("переименован"))
+                new_name = sanitize(ask(tr("новое имя"), w["name"])[:24])
+                if new_name:
+                    w["name"] = new_name
+                    self.save()
+                    self.set_flash(tr("переименован"))
             elif ch == "6":
                 if self.delete_wallet(idx):
                     return
@@ -1595,7 +1699,9 @@ class App:
                 tag = ""
             return [
                 f"  {label:<12} " + paint(to_friendly(raw_addr), C.CYAN) + tag,
-                "  " + " " * 12 + " " + paint(str(raw_addr), C.GREY),
+                # отступ подобран так, чтобы raw 0:… (66 символов) влезал
+                # даже в минимальную ширину рамки 84 (inner 80): 2+12+66 = 80
+                "  " + " " * 12 + paint(str(raw_addr), C.GREY),
             ]
 
         rows = [
@@ -1616,9 +1722,13 @@ class App:
         rows.append("")
         if tx.get("event_id"):
             rows.append(tr("  Событие: ") + paint(str(tx["event_id"]), C.GREY))
-            rows.append("  " + explorer_link("tx", tx["event_id"]))
-        rows.append(paint(tr("  Адреса показаны целиком — можно скопировать прямо из консоли (выделить мышью)."), C.GREY))
-        rows.append(paint(tr("  Свежие детали всегда можно сверить в блок-эксплорере по ссылке выше."), C.GREY))
+            # ссылку показываем, только если влезает целиком (на узком
+            # терминале полный id события выше — всё равно доступен)
+            link = explorer_link("tx", tx["event_id"])
+            if len("  " + link) <= W - 4:
+                rows.append("  " + link)
+        rows.append(paint(tr("  Адреса показаны целиком — выделите мышью и скопируйте."), C.GREY))
+        rows.append(paint(tr("  Детали можно сверить в блок-эксплорере по ссылке выше."), C.GREY))
         self.ui.page(tr("детали транзакции"), rows)
         pause()
 
@@ -1634,11 +1744,17 @@ class App:
         with_seed = confirm(tr("включить seed-фразы в файл? (опасно)"))
         default = f"{NAME_PREFIX}_wallets{'_SECRET' if with_seed else ''}_{datetime.now():%Y%m%d_%H%M}.csv"
         fname = ask(tr("имя файла"), default)
+        # не перезаписываем молча существующие файлы — защита от опечатки
+        if os.path.exists(fname) and not confirm(tr("файл {f} уже существует — перезаписать?", f=fname)):
+            self.set_flash(tr("экспорт отменён"), ok=False)
+            return
         with open(fname, "w", newline="", encoding="utf-8-sig") as f:
             wr = csv.writer(f, delimiter=";")
             wr.writerow(["name", "address", "version", "ton", "usdt"] + (["mnemonic"] if with_seed else []))
             for w in self.wallets:
-                row = [w["name"], w["address"], w.get("version", WALLET_VERSION),
+                # csv_safe: имя, начинающееся с = + - @, в Excel исполнилось
+                # бы как формула — экранируем
+                row = [csv_safe(w["name"]), w["address"], w.get("version", WALLET_VERSION),
                        fmt_ton(w.get("ton")), fmt_usdt(w.get("usdt"))]
                 wr.writerow(row + ([w["mnemonic"]] if with_seed else []))
         if with_seed:
@@ -1684,14 +1800,17 @@ class App:
             return
         try:
             wallet, _, _, _ = WALLET_CLASSES[version].from_mnemonic(self.client, words)
-        except Exception as exc:
-            self.set_flash(tr("seed не принят: {e}", e=str(exc)[:60]), ok=False)
+        except Exception:
+            # не выводим текст исключения: теоретически он может содержать
+            # фрагменты введённых слов — показываем нейтральную причину
+            self.set_flash(tr("seed не принят: проверь слова, их порядок и версию кошелька"), ok=False)
             return
         address = wallet.address.to_str(is_bounceable=False)
         if any(w["address"] == address for w in self.wallets):
             self.set_flash(tr("такой кошелёк уже есть в хранилище"), ok=False)
             return
-        name = ask(tr("имя"), f"{NAME_PREFIX}-{self.next_name(NAME_PREFIX):02d}")[:24]
+        name = sanitize(ask(tr("имя"), f"{NAME_PREFIX}-{self.next_name(NAME_PREFIX):02d}")[:24]) \
+            or f"{NAME_PREFIX}-{self.next_name(NAME_PREFIX):02d}"
         self.wallets.append({
             "name": name, "address": address, "version": version, "mnemonic": " ".join(words),
             "created": datetime.now().isoformat(timespec="seconds"),
@@ -1733,7 +1852,7 @@ async def main():
         if await app.boot():
             await app.run()
     Screen.clear()
-    print(paint(tr("  TONFORGE · хранилище закрыто, до встречи") + "\n", C.GREY))
+    print(paint(f"  TONFORGE {APP_VERSION} · " + tr("хранилище закрыто, до встречи") + "\n", C.GREY))
 
 
 if __name__ == "__main__":
