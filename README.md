@@ -7,11 +7,11 @@
 Установка - pip install tonutils cryptography
 Запуск - python tonforge.py
 
-🇷🇺 Русский
-TONFORGE — консольный менеджер кошельков TON и USDT
-TONFORGE — это генератор и библиотека-инструмент на Python, которая превращает набор ползунков в веб-конфигураторе в готовый консольный скрипт для массовой работы с криптокошельками в сети TON (The Open Network). Проект решает задачу управления пулами кошельков для выплат, фарминга, тестирования и собственной автоматизации — без единой строчки собственного кода.
+# 🇷🇺 Русский
+# TONFORGE — консольный менеджер кошельков TON и USDT
+# TONFORGE — это генератор и библиотека-инструмент на Python, которая превращает набор ползунков в веб-конфигураторе в готовый консольный скрипт для массовой работы с криптокошельками в сети TON (The Open Network). Проект решает задачу управления пулами кошельков для выплат, фарминга, тестирования и собственной автоматизации — без единой строчки собственного кода.
 
-Что умеет скрипт:
+# Что умеет скрипт:
 
 Пакетное создание кошельков — генерация пачек по 10+ кошельков (V3R2 / V4R2 / W5) с именами worker-01… за доли секунды; seed-фразы создаются локально.
 
@@ -31,11 +31,11 @@ TONFORGE — это генератор и библиотека-инструме�
 
 Стек: Python 3.9+, tonutils (официальный SDK для TON), cryptography · React 19, TypeScript, Tailwind CSS 4, Framer Motion, Vite.
 
-🇬🇧 English
-TONFORGE — a console wallet manager for TON & USDT
-TONFORGE is a Python generator toolkit that turns a set of sliders in a web configurator into a ready-to-run console script for managing crypto wallets at scale on the TON blockchain (The Open Network). It covers payout pools, farming setups, testing environments, and personal automation — without writing a single line of your own code.
+# 🇬🇧 English
+# TONFORGE — a console wallet manager for TON & USDT
+# TONFORGE is a Python generator toolkit that turns a set of sliders in a web configurator into a ready-to-run console script for managing crypto wallets at scale on the TON blockchain (The Open Network). It covers payout pools, farming setups, testing environments, and personal automation — without writing a single line of your own code.
 
-What the script does:
+# What the script does:
 
 Batch wallet creation — generate batches of 10+ wallets (V3R2 / V4R2 / W5) named worker-01… in a fraction of a second; seed phrases are created locally.
 
