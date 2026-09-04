@@ -2,6 +2,7 @@
 
 > [!IMPORTANT]
 > ## TONFORGE v0.8.5 Beta
+<img width="775" height="232" alt="image" src="https://github.com/user-attachments/assets/9542dced-fd90-4f99-b637-04375bd0edc3" />
 
 **🐛 Bug Fixes** 
 Fixed text overflowing outside the terminal frame.
