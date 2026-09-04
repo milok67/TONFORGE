@@ -5,8 +5,7 @@
 
 Запуск - python tonforge.py
 
-# TONFORGE v1.1.0 
-* **Update:** improved transaction security, balance verification, and added transaction history.
+# TONFORGE v1.1.0 Update
 <img width="644" height="232" alt="image" src="https://github.com/user-attachments/assets/a54070a5-a89d-41c6-8e3a-969ddc87977a" />
 <img width="644" height="266" alt="image" src="https://github.com/user-attachments/assets/0af9d698-57f2-4b92-bef1-d2d33cfae5e9" />
 
