@@ -1,19 +1,20 @@
 # TONFORGE v1.1.0 
-Обновление: улучшена безопасность операций, проверка балансов и добавлена история транзакций.
+Update: improved transaction security, balance verification, and added transaction history.
 
-Что изменилось
-🔐 Хранилище: улучшена обработка пароля и ошибок повреждённого JSON.
-💰 Балансы: перед отправкой TON/USDT теперь выполняется обязательное обновление баланса.
-📤 Переводы: отправка использует свежие данные о балансе непосредственно перед подтверждением.
-🔄 Mass Sweep: перед массовым сбором средств баланс всех кошельков теперь обновляется автоматически.
-⛽ Gas: JETTON_GAS_TON = 0.05 TON, для массового USDT sweep введён повышенный безопасный порог 0.1 TON.
-🌐 Сеть: проверка Address.is_test_only вместо определения сети по префиксу адреса.
-🧹 Seed cleanup: добавлена максимально возможная очистка seed-фраз из памяти Python с gc.collect() с учётом ограничений Python.
-📜 История транзакций: добавлен просмотр операций TON и USDT через TonAPI.
-🟢🔴 Направление: входящие и исходящие операции отображаются со знаком и цветовой индикацией.
-📄 История: постраничный просмотр, сумма, направление, адрес контрагента, время, комментарий и ссылка на explorer.
-🛡️ Проверка: код и используемые методы tonutils проверены на реальной установленной библиотеке; исправления, не соответствующие API, не применялись.
-Статус: основные операции TON/USDT, обновление балансов, массовый sweep и история транзакций обновлены и проверены.
+What’s Changed
+🔐 Vault: improved password handling and corrupted JSON error handling.
+💰 Balances: balances are now automatically refreshed before sending TON/USDT.
+📤 Transfers: sending operations use fresh balance data immediately before confirmation.
+🔄 Mass Sweep: all wallet balances are now automatically refreshed before building the sweep plan.
+⛽ Gas: JETTON_GAS_TON = 0.05 TON; a higher safety threshold of 0.1 TON was added for mass USDT sweeps.
+🌐 Network: uses Address.is_test_only instead of detecting the network by address prefix.
+🧹 Seed Cleanup: added the maximum practical memory cleanup available in Python with gc.collect(), with the limitations explicitly documented.
+📜 Transaction History: added TON and USDT transaction history using TonAPI.
+🟢🔴 Direction: incoming and outgoing transactions are displayed with signs and color indicators.
+📄 History Details: pagination, amount, direction, counterparty address, timestamp, comment, and blockchain explorer link.
+🛡️ Verification: tonutils APIs and implemented methods were checked against the actual installed library; fixes that did not match the real API were not applied.
+
+Status: TON/USDT transfers, balance refresh, mass sweep, and transaction history have been updated and verified.
 
 Установка - pip install tonutils cryptography
 Запуск - python tonforge.py
