@@ -2,6 +2,7 @@
 
 > [!IMPORTANT]
 > ## TONFORGE v0.8.0 Beta
+<img width="771" height="264" alt="image" src="https://github.com/user-attachments/assets/661fa170-516c-42fb-841f-b60fe42ccb06" />
 
 **📜 Transaction History**
 
