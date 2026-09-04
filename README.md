@@ -11,7 +11,7 @@
 
 * **Update:** improved transaction security, balance verification, and added transaction history.
 
-* What’s Changed
+**What’s Changed**
 * 🔐 Vault: improved password handling and corrupted JSON error handling.
 * 💰 Balances: balances are now automatically refreshed before sending TON/USDT.
 * 📤 Transfers: sending operations use fresh balance data immediately before confirmation.
@@ -23,7 +23,7 @@
 * 🟢🔴 Direction: incoming and outgoing transactions are displayed with signs and color indicators.
 * 📄 History Details: pagination, amount, direction, counterparty address, timestamp, comment, and blockchain explorer link.
 * 🛡️ Verification: tonutils APIs and implemented methods were checked against the actual installed library; fixes that did not match the real API were not applied.
-* Status: TON/USDT transfers, balance refresh, mass sweep, and transaction history have been updated and verified.
+Status: TON/USDT transfers, balance refresh, mass sweep, and transaction history have been updated and verified.
 
 # TONFORGE v1.0.0 
 <img width="642" height="230" alt="image" src="https://github.com/user-attachments/assets/0f331dcf-2f6e-4fa6-abcd-91b5fa438e5a" />
