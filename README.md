@@ -37,8 +37,6 @@ Status: TON/USDT transfers, balance refresh, mass sweep, and transaction history
 <img width="642" height="230" alt="image" src="https://github.com/user-attachments/assets/0f331dcf-2f6e-4fa6-abcd-91b5fa438e5a" />
 <img width="646" height="402" alt="image" src="https://github.com/user-attachments/assets/c7059bdf-bffb-4587-9461-f1e9f24b02aa" />
 
-Установка - pip install tonutils cryptography
-Запуск - python tonforge.py
 
 # 🇷🇺 Русский
 # TONFORGE
