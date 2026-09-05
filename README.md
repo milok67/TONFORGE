@@ -4,12 +4,13 @@
 > ## TONFORGE v0.9.0 Beta
 <img width="774" height="312" alt="image" src="https://github.com/user-attachments/assets/45fe13d8-60a8-4c56-9c6f-de463ff06165" />
 
-✨ What's New
+**✨ What's New**
 TON ↔ USDT swaps via STON.fi
 Available in [12] Main Menu and [8] Wallet
 Supports both directions + all amount
 Detailed confirmation with rate, output, slippage, pool fee & gas
-🔐 Security
+
+**🔐 Security**
 Private keys never leave the device
 Swapped tokens are received on the same wallet
 Quotes fetched from api.ston.fi
