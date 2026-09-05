@@ -1,7 +1,7 @@
 <img width="1960" height="520" alt="tonforge-horizontal (1)" src="https://github.com/user-attachments/assets/020829b6-ba79-4c65-a070-0c3fe9bfe834" />
 
 > [!IMPORTANT]
-> ## TONFORGE v0.9.0 Beta
+> ## TONFORGE v0.9.0-rc1
 <img width="774" height="312" alt="image" src="https://github.com/user-attachments/assets/45fe13d8-60a8-4c56-9c6f-de463ff06165" />
 
 **🔄 What's New**
