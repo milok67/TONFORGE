@@ -4,12 +4,12 @@
 > ## TONFORGE v0.9.0 Beta
 <img width="774" height="312" alt="image" src="https://github.com/user-attachments/assets/45fe13d8-60a8-4c56-9c6f-de463ff06165" />
 
-**Added TON ↔ USDT swaps via STON.fi — available as [12] in the main menu and [8] in the wallet card.**
+**🔄 Added TON ↔ USDT swaps via STON.fi — available as [12] in the main menu and [8] in the wallet card.**
 **Supports both directions and all amount.**
-Shows rate, expected output, minimum output with slippage, pool fee, and gas before confirmation.
-Private keys stay on the device; tokens are received on the same wallet.
-Quotes are fetched from api.ston.fi, while the swap transaction is built locally according to the STON.fi v1 specification.
-Transaction structure verified against the official ston-fi/sdk.
+**Shows rate, expected output, minimum output with slippage, pool fee, and gas before confirmation.**
+**Private keys stay on the device; tokens are received on the same wallet.**
+**Quotes are fetched from api.ston.fi, while the swap transaction is built locally according to the STON.fi v1 specification.**
+**Transaction structure verified against the official ston-fi/sdk.**
 
 
 > [!IMPORTANT]
