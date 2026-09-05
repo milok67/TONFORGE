@@ -14,6 +14,12 @@
 #     и имена своих кошельков — сразу видно, от кого пришло и кому ушло
 #   • пункт [11] — переключение языка интерфейса RU/EN
 #     (выбор хранится в tonforge.config.json рядом со скриптом)
+#   • пункт [12] — обмен TON ↔ USDT через DEX STON.fi: котировка берётся
+#     у публичного api.ston.fi (курс, минимум с учётом проскальзывания,
+#     влияние на цену, комиссия пула и газ), а тело swap-транзакции
+#     собирается локально строго по спецификации роутера v1 — опкоды и
+#     газ-константы сверены с официальным SDK ston-fi/sdk. Обмен идёт
+#     на том же кошельке (mainnet), приватные ключи никуда не уходят
 #   Интерфейс страничный: экран очищается перед каждым шагом,
 #   поэтому в консоли нет бесконечной ленты сообщений.
 # ----------------------------------------------------------------
@@ -72,7 +78,7 @@ from tonutils.contracts import (
 from tonutils.types import DEFAULT_HTTP_RETRY_POLICY
 
 # ══════════════════════ НАСТРОЙКИ ══════════════════════
-APP_VERSION       = "v0.8.5 beta"    # показывается в шапке каждого окна
+APP_VERSION       = "v0.9.0 beta"    # показывается в шапке каждого окна
 NETWORK           = "mainnet"        # mainnet | testnet
 TONCENTER_API_KEY = ""   # ключ от @toncenter; без ключа ~1 запрос в 1.3 с
 RPS_LIMIT         = 10          # лимит запросов/с — применяется только с ключом
@@ -89,6 +95,11 @@ EXPLORER          = "tonviewer"  # tonviewer | tonscan
 ROWS_PER_PAGE     = 15          # строк списка на одной странице
 TONAPI_API_KEY    = ""          # ключ tonapi.io (необязательно, поднимает лимиты)
 TX_HISTORY_LIMIT  = 30          # сколько последних событий запрашивать для истории
+
+# ── обменник TON ↔ USDT (DEX STON.fi) ──
+SWAP_SLIPPAGE      = 0.01   # допустимое проскальзывание: 0.01 = 1%
+SWAP_WARN_IMPACT   = 0.02   # предупреждать, если price impact выше 2%
+SWAP_MIN_TON_LEFT  = 0.1    # столько TON оставлять на кошельке при обмене «всё»
 
 # ═══════════════════════ КОНСТАНТЫ ═══════════════════════
 IS_TESTNET = NETWORK == "testnet"
@@ -117,6 +128,21 @@ STATE_RU = {
 # одна запись истории занимает ДВЕ строки: на первой — дата и сумма,
 # на второй — ПОЛНЫЙ адрес контрагента (48 символов)
 TX_ROWS_PER_PAGE = 7
+
+# ── STON.fi (обмен TON ↔ USDT) ──
+# Котировка берётся у публичного API STON.fi, а тело swap-транзакции
+# собирается локально строго по спецификации роутера v1 (см. build_swap_body):
+#   swap#25938561 ask_jetton_wallet:MsgAddress min_out:Coins
+#                 to_address:MsgAddress has_ref:(## 1) = SwapBody
+# Опкоды и газ-константы сверены с официальным SDK ston-fi/sdk (RouterV1/PtonV1).
+STONFI_API        = "https://api.ston.fi"
+STONFI_PTON_V1    = "EQCM3B12QK1e4yZSf8GtBRT0aLMNyEsBc_DhVfRRtOEffLez"
+OP_STONFI_SWAP    = 0x25938561
+OP_JETTON_TRANSFER = 0x0f8a7ea5
+# запасные значения газа, если API их не вернёт (равны константам SDK v1)
+GAS_TON_TO_JETTON_FWD  = to_nano(0.185)
+GAS_JETTON_TO_TON      = to_nano(0.17)
+GAS_JETTON_TO_TON_FWD  = to_nano(0.125)
 
 
 def _page_width():
@@ -413,6 +439,57 @@ EN = {
     "seed не принят: проверь слова, их порядок и версию кошелька": "seed rejected: check the words, their order and the wallet version",
     "такой кошелёк уже есть в хранилище": "this wallet is already in the vault",
     "импортирован {name} · {addr}": "imported {name} · {addr}",
+    # ── обмен TON ↔ USDT ─────────────────────────────────────────────
+    "Обмен TON ↔ USDT": "Swap TON ↔ USDT",
+    "обмен доступен только в сети mainnet": "swapping is available on mainnet only",
+    "обмен · шаг 1/4 · кошелёк": "swap · step 1/4 · wallet",
+    "выбери кошелёк, на котором делаем обмен": "pick the wallet to swap on",
+    "обмен отменён": "swap cancelled",
+    "обмен · шаг 2/4 · направление": "swap · step 2/4 · direction",
+    "  Обмен идёт через DEX STON.fi: курс рыночный, комиссия пула ~0.3%,": "  Swapping goes through the STON.fi DEX: market rate, pool fee ~0.3%,",
+    "  плюс газ сети. Проскальзывание: {s}%.": "  plus network gas. Slippage tolerance: {s}%.",
+    "обмен · проверка баланса": "swap · balance check",
+    "  Запрашиваю актуальный баланс перед обменом…": "  Fetching the current balance before the swap…",
+    "Отдаём:": "You pay:",
+    "Получаем:": "You get:",
+    "Получим:": "You get:",
+    "Минимум:": "Minimum:",
+    "Курс:": "Rate:",
+    "Комиссия пула:": "Pool fee:",
+    "Газ:": "Gas:",
+    "Биржа:": "Exchange:",
+    "роутер": "router",
+    " — обменять максимум.": " — swap the maximum.",
+    "  При «all» на газ останется {r} TON.": "  With “all”, {r} TON is kept for gas.",
+    "  Для обмена USDT нужно ≥ {g} TON на газ.": "  Swapping USDT requires ≥ {g} TON for gas.",
+    "обмен · шаг 3/4 · сумма": "swap · step 3/4 · amount",
+    "не хватает TON: нужен запас на газ": "not enough TON: a gas reserve is required",
+    "не хватает TON с учётом газа": "not enough TON including gas",
+    "баланс USDT нулевой — нечего обменивать": "USDT balance is zero — nothing to swap",
+    "обмен · запрашиваю курс": "swap · fetching the rate",
+    "  Спрашиваю у STON.fi, сколько {d} дадут за {a} {s}…": "  Asking STON.fi how much {d} you get for {a} {s}…",
+    "курс недоступен: {e}": "rate unavailable: {e}",
+    "1 TON ≈ {v} USDT": "1 TON ≈ {v} USDT",
+    "1 USDT ≈ {v} TON": "1 USDT ≈ {v} TON",
+    "списание с кошелька: {t} TON (сумма + газ)": "debited from the wallet: {t} TON (amount + gas)",
+    "газ спишется с TON-баланса: {t} TON": "gas is taken from the TON balance: {t} TON",
+    "влияние на цену {p}% — сумма велика для пула": "price impact {p}% — the amount is large for this pool",
+    "биржа вернула нулевой минимум — обмен не выполняем": "the exchange returned a zero minimum — the swap is not performed",
+    "  (при проскальзывании {s}%)": "  (at {s}% slippage)",
+    "влияние на цену: {p}%": "price impact: {p}%",
+    "(излишек вернётся)": "(the excess is returned)",
+    "обмен · шаг 4/4 · подтверждение": "swap · step 4/4 · confirmation",
+    "  Курс рыночный и может измениться — сеть исполнит обмен не мгновенно.": "  The rate is market-based and may change — the network won't execute instantly.",
+    "обменять?": "swap?",
+    "роутер STON.fi версии {v} не поддерживается": "STON.fi router version {v} is not supported",
+    "не найден конструктор ячеек (begin_cell) — обнови tonutils": "cell builder (begin_cell) not found — update tonutils",
+    "биржа не вернула адрес pTON-кошелька": "the exchange did not return the pTON wallet address",
+    "ошибка обмена: {e}": "swap error: {e}",
+    "  Обмен отправлен: {a} {s} → ≈ {b} {d}": "  Swap sent: {a} {s} → ≈ {b} {d}",
+    "обмен отправлен": "swap sent",
+    "  DEX исполнит обмен за 10–60 секунд; монеты придут на этот же кошелёк.": "  The DEX will execute in 10–60 seconds; coins arrive to this same wallet.",
+    "  Если цена уйдёт ниже минимума — средства вернутся автоматически.": "  If the price falls below the minimum, the funds are returned automatically.",
+    "обмен отправлен с {name}": "swap sent from {name}",
     # ── выбор языка ──────────────────────────────────────────────────
     "выбор языка": "language selection",
     "  Текущий язык интерфейса: ": "  Current interface language: ",
@@ -697,6 +774,125 @@ def parse_events(raw_json, my_raw_address):
                 txs.append(tx)
     txs.sort(key=lambda x: x.get("ts") or 0, reverse=True)
     return txs
+
+
+# ═══════════════════════ ОБМЕН TON ↔ USDT (STON.fi) ═══════════════════════
+class SwapError(Exception):
+    """Понятная пользователю ошибка обмена (не трассировка)."""
+
+
+async def stonfi_simulate(offer_addr, ask_addr, units, slippage):
+    """Котировка у STON.fi: сколько получим, минимум с учётом проскальзывания,
+    price impact, комиссия и рекомендованный газ. Ничего не подписывает."""
+    def _do():
+        r = requests.post(
+            f"{STONFI_API}/v1/swap/simulate",
+            params={
+                "offer_address": offer_addr,
+                "ask_address": ask_addr,
+                "units": str(int(units)),
+                "slippage_tolerance": str(slippage),
+            },
+            headers={"Accept": "application/json"},
+            timeout=20,
+        )
+        if r.status_code >= 400:
+            try:
+                msg = r.json()
+                msg = msg if isinstance(msg, str) else msg.get("error") or str(msg)
+            except ValueError:
+                msg = r.text
+            raise SwapError(sanitize(str(msg), 90) or f"HTTP {r.status_code}")
+        return r.json()
+
+    return await asyncio.to_thread(_do)
+
+
+def _begin_cell():
+    """Конструктор ячеек берём из того же ядра, что и Address. Разные версии
+    tonutils кладут его в разные модули — пробуем известные варианты."""
+    for mod_name in ("ton_core", "pytoniq_core"):
+        try:
+            mod = __import__(mod_name, fromlist=["begin_cell"])
+        except ImportError:
+            continue
+        fn = getattr(mod, "begin_cell", None)
+        if fn is not None:
+            return fn
+    raise SwapError(tr("не найден конструктор ячеек (begin_cell) — обнови tonutils"))
+
+
+def build_swap_body(ask_jetton_wallet, min_out, receiver):
+    """forward_payload для роутера STON.fi v1:
+    swap#25938561 ask_jetton_wallet:MsgAddress min_out:Coins to:MsgAddress has_ref:(## 1)"""
+    begin_cell = _begin_cell()
+    return (
+        begin_cell()
+        .store_uint(OP_STONFI_SWAP, 32)
+        .store_address(Address(ask_jetton_wallet))
+        .store_coins(int(min_out))
+        .store_address(Address(receiver))
+        .store_uint(0, 1)  # без реферала
+        .end_cell()
+    )
+
+
+def build_jetton_transfer_body(amount, destination, response_to, forward_ton, forward_payload):
+    """Стандартный transfer#0f8a7ea5 из TEP-74 с forward_payload ссылкой."""
+    begin_cell = _begin_cell()
+    b = (
+        begin_cell()
+        .store_uint(OP_JETTON_TRANSFER, 32)
+        .store_uint(0, 64)                     # query_id
+        .store_coins(int(amount))
+        .store_address(Address(destination))
+    )
+    b = b.store_address(Address(response_to) if response_to else None)
+    b = b.store_uint(0, 1)                     # custom_payload отсутствует
+    b = b.store_coins(int(forward_ton))
+    b = b.store_uint(1, 1)                     # forward_payload — ссылкой
+    return b.store_ref(forward_payload).end_cell()
+
+
+def parse_quote(sim, direction):
+    """Ответ STON.fi → аккуратная структура для экрана подтверждения."""
+    router = sim.get("router") or {}
+    version = router.get("major_version")
+    if version != 1:
+        # тело транзакции собрано строго под роутер v1; для чужой версии
+        # честнее отказаться, чем отправить деньги неизвестно куда
+        raise SwapError(tr("роутер STON.fi версии {v} не поддерживается", v=version))
+    gas = sim.get("gas_params") or {}
+
+    def _int(value, fallback):
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return fallback
+
+    def _float(value):
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return 0.0
+
+    return {
+        "router": sim.get("router_address") or router.get("address"),
+        "pton_wallet": router.get("pton_wallet_address"),
+        "offer_jetton_wallet": sim.get("offer_jetton_wallet"),
+        "ask_jetton_wallet": sim.get("ask_jetton_wallet"),
+        "offer_units": _int(sim.get("offer_units"), 0),
+        "ask_units": _int(sim.get("ask_units"), 0),
+        "min_ask_units": _int(sim.get("min_ask_units"), 0),
+        "swap_rate": _float(sim.get("swap_rate")),
+        "price_impact": _float(sim.get("price_impact")),
+        "fee_percent": _float(sim.get("fee_percent")),
+        "forward_gas": _int(
+            gas.get("forward_gas"),
+            GAS_TON_TO_JETTON_FWD if direction == "ton_to_usdt" else GAS_JETTON_TO_TON_FWD,
+        ),
+        "gas_budget": _int(gas.get("gas_budget"), GAS_JETTON_TO_TON),
+    }
 
 
 # ═══════════════════════ ВВОД ═══════════════════════
@@ -1048,6 +1244,8 @@ class App:
                     await self.screen_transactions(idx)
             elif ch == "11":
                 self.screen_language()
+            elif ch == "12":
+                await self.screen_swap()
             elif ch in ("0", "q", "exit", "выход", "quit"):
                 return
             else:
@@ -1066,8 +1264,9 @@ class App:
             two_col(key(2) + " " + tr("Создать пачку ({n} шт)", n=BATCH_SIZE), key(7) + " " + tr("Показать seed-фразу")),
             two_col(key(3) + " " + tr("Обновить балансы"), key(8) + " " + tr("Экспорт адресов в CSV")),
             two_col(key(4) + " " + tr("Перевод TON"), key(9) + " " + tr("Импорт seed-фразы")),
-            two_col(key(5) + " " + tr("Перевод USDT"), key(0) + " " + tr("Выход")),
-            two_col(key(10) + " " + tr("История транзакций"), key(11) + " Язык / Language"),
+            two_col(key(5) + " " + tr("Перевод USDT"), key(11) + " Язык / Language"),
+            two_col(key(10) + " " + tr("История транзакций"), key(0) + " " + tr("Выход")),
+            two_col(key(12) + " " + tr("Обмен TON ↔ USDT"), ""),
         ]
 
     # ---------- выбор языка ----------
@@ -1153,7 +1352,7 @@ class App:
                 two_col(key(1) + " " + tr("Перевести TON"), key(4) + " " + tr("Показать seed-фразу")),
                 two_col(key(2) + " " + tr("Перевести USDT"), key(5) + " " + tr("Переименовать")),
                 two_col(key(3) + " " + tr("Обновить баланс"), key(6) + " " + tr("Удалить из хранилища")),
-                two_col(key(7) + " " + tr("История транзакций"), ""),
+                two_col(key(7) + " " + tr("История транзакций"), key(8) + " " + tr("Обмен TON ↔ USDT")),
                 "",
                 paint(tr("  Enter — назад к списку"), C.GREY),
             ]
@@ -1180,6 +1379,8 @@ class App:
                     return
             elif ch == "7":
                 await self.screen_transactions(idx)
+            elif ch == "8":
+                await self.screen_swap(idx)
             else:
                 self.set_flash(tr("не понял команду"), ok=False)
 
@@ -1731,6 +1932,207 @@ class App:
         rows.append(paint(tr("  Детали можно сверить в блок-эксплорере по ссылке выше."), C.GREY))
         self.ui.page(tr("детали транзакции"), rows)
         pause()
+
+    # ---------- обмен TON ↔ USDT ----------
+    async def screen_swap(self, idx=None):
+        if IS_TESTNET:
+            self.set_flash(tr("обмен доступен только в сети mainnet"), ok=False)
+            return
+        if idx is None:
+            idx = self.pick_wallet(tr("обмен · шаг 1/4 · кошелёк"),
+                                   tr("выбери кошелёк, на котором делаем обмен"))
+            if idx is None:
+                self.set_flash(tr("обмен отменён"), ok=False)
+                return
+        w = self.wallets[idx]
+
+        rows = [
+            f"  {tr('Кошелёк:')}  {paint(w['name'], C.BOLD)}  {paint(short(w['address']), C.CYAN)}",
+            f"  {tr('Баланс:')}   {fmt_ton(w.get('ton'))} TON · {fmt_usdt(w.get('usdt'))} USDT",
+            "",
+            two_col(key(1) + " TON → USDT", key(2) + " USDT → TON"),
+            "",
+            paint(tr("  Обмен идёт через DEX STON.fi: курс рыночный, комиссия пула ~0.3%,"), C.GREY),
+            paint(tr("  плюс газ сети. Проскальзывание: {s}%.", s=round(SWAP_SLIPPAGE * 100, 2)), C.GREY),
+            paint(tr("Enter — отмена"), C.GREY),
+        ]
+        self.ui.page(tr("обмен · шаг 2/4 · направление"), rows)
+        choice = ask(tr("выбор"))
+        if choice == "1":
+            direction, src, dst = "ton_to_usdt", "TON", "USDT"
+        elif choice == "2":
+            direction, src, dst = "usdt_to_ton", "USDT", "TON"
+        else:
+            self.set_flash(tr("обмен отменён"), ok=False)
+            return
+
+        # свежий баланс обязателен: считаем сумму и газ по актуальным данным
+        self.ui.page(tr("обмен · проверка баланса"), [
+            f"  {tr('Кошелёк:')} {w['name']}  {short(w['address'])}",
+            tr("  Запрашиваю актуальный баланс перед обменом…"),
+        ])
+        await self.refresh_wallets([idx])
+        w = self.wallets[idx]
+
+        have_ton, have_usdt = w.get("ton") or 0, w.get("usdt") or 0
+        rows = [
+            f"  {tr('Отдаём:')}   {paint(src, C.BOLD)}   →   {tr('Получаем:')} {paint(dst, C.BOLD)}",
+            f"  {tr('Баланс:')}   {fmt_ton(have_ton)} TON · {fmt_usdt(have_usdt)} USDT",
+            "",
+            tr("  Сумма в {l}; слово ", l=src) + paint("all", C.BOLD) + tr(" — обменять максимум."),
+        ]
+        if direction == "ton_to_usdt":
+            rows.append(paint(tr("  При «all» на газ останется {r} TON.", r=SWAP_MIN_TON_LEFT), C.GREY))
+        else:
+            rows.append(paint(tr("  Для обмена USDT нужно ≥ {g} TON на газ.",
+                                 g=fmt_ton(GAS_JETTON_TO_TON)), C.GREY))
+        self.ui.page(tr("обмен · шаг 3/4 · сумма"), rows)
+        raw = ask(tr("сумма {l}", l=src)).lower()
+        if not raw:
+            self.set_flash(tr("обмен отменён"), ok=False)
+            return
+
+        try:
+            if direction == "ton_to_usdt":
+                reserve = to_nano(SWAP_MIN_TON_LEFT)
+                if raw == "all":
+                    units = have_ton - reserve
+                    if units <= 0:
+                        raise ValueError(tr("не хватает TON: нужен запас на газ"))
+                else:
+                    units = to_units(raw, TON_DECIMALS)
+                if units + reserve > have_ton:
+                    raise ValueError(tr("не хватает TON с учётом газа"))
+            else:
+                units = have_usdt if raw == "all" else to_units(raw, USDT_DECIMALS)
+                if units <= 0:
+                    raise ValueError(tr("баланс USDT нулевой — нечего обменивать"))
+                if units > have_usdt:
+                    raise ValueError(tr("сумма больше баланса USDT"))
+                if have_ton < GAS_JETTON_TO_TON:
+                    raise ValueError(tr("мало TON на газ: нужно ≥ {m} TON",
+                                        m=fmt_ton(GAS_JETTON_TO_TON)))
+        except ValueError as exc:
+            self.set_flash(tr("сумма: {e}", e=exc), ok=False)
+            return
+
+        # ── котировка ──
+        self.ui.page(tr("обмен · запрашиваю курс"), [
+            tr("  Спрашиваю у STON.fi, сколько {d} дадут за {a} {s}…",
+               d=dst, a=(fmt_ton(units) if direction == "ton_to_usdt" else fmt_usdt(units)), s=src),
+        ])
+        offer_addr = STONFI_PTON_V1 if direction == "ton_to_usdt" else USDT_MASTER
+        ask_addr = USDT_MASTER if direction == "ton_to_usdt" else STONFI_PTON_V1
+        try:
+            sim = await stonfi_simulate(offer_addr, ask_addr, units, SWAP_SLIPPAGE)
+            q = parse_quote(sim, direction)
+        except SwapError as exc:
+            self.set_flash(tr("курс недоступен: {e}", e=exc), ok=False)
+            return
+        except Exception as exc:
+            self.set_flash(tr("курс недоступен: {e}", e=str(exc)[:60]), ok=False)
+            return
+
+        if direction == "ton_to_usdt":
+            give, get_, get_min = fmt_ton(units), fmt_usdt(q["ask_units"]), fmt_usdt(q["min_ask_units"])
+            rate = tr("1 TON ≈ {v} USDT", v=f"{q['swap_rate']:.4f}")
+            gas_note = fmt_ton(q["forward_gas"])
+            total_ton = units + q["forward_gas"]
+            total_note = tr("списание с кошелька: {t} TON (сумма + газ)", t=fmt_ton(total_ton))
+        else:
+            give, get_, get_min = fmt_usdt(units), fmt_ton(q["ask_units"]), fmt_ton(q["min_ask_units"])
+            rate = tr("1 USDT ≈ {v} TON", v=f"{q['swap_rate']:.4f}")
+            gas_note = fmt_ton(q["gas_budget"])
+            total_note = tr("газ спишется с TON-баланса: {t} TON", t=fmt_ton(q["gas_budget"]))
+
+        warn = []
+        if q["price_impact"] >= SWAP_WARN_IMPACT:
+            warn.append(tr("влияние на цену {p}% — сумма велика для пула",
+                           p=f"{q['price_impact'] * 100:.2f}"))
+        if q["min_ask_units"] <= 0:
+            warn.append(tr("биржа вернула нулевой минимум — обмен не выполняем"))
+
+        rows = [
+            f"  {tr('Кошелёк:')}  {w['name']}  {short(w['address'])}",
+            "",
+            f"  {tr('Отдаём:')}   " + paint(f"{give} {src}", C.BOLD, C.RED),
+            f"  {tr('Получим:')}  " + paint(f"≈ {get_} {dst}", C.BOLD, C.LIME),
+            f"  {tr('Минимум:')}  {get_min} {dst}" + paint(
+                tr("  (при проскальзывании {s}%)", s=round(SWAP_SLIPPAGE * 100, 2)), C.GREY),
+            "",
+            f"  {tr('Курс:')}     {rate}",
+            f"  {tr('Комиссия пула:')} {q['fee_percent'] * 100:.3f}%   "
+            + tr("влияние на цену: {p}%", p=f"{q['price_impact'] * 100:.3f}"),
+            f"  {tr('Газ:')}      ~{gas_note} TON   " + paint(tr("(излишек вернётся)"), C.GREY),
+            "  " + paint(total_note, C.GREY),
+            f"  {tr('Биржа:')}    STON.fi · {tr('роутер')} v1",
+            "",
+        ]
+        rows += [paint("  ! " + t, C.YEL) for t in warn]
+        rows.append(paint(tr("  Курс рыночный и может измениться — сеть исполнит обмен не мгновенно."), C.GREY))
+        self.ui.page(tr("обмен · шаг 4/4 · подтверждение"), rows)
+        if q["min_ask_units"] <= 0:
+            self.set_flash(tr("обмен отменён"), ok=False)
+            return
+        if not confirm(tr("обменять?")):
+            self.set_flash(tr("обмен отменён"), ok=False)
+            return
+
+        # ── сборка и отправка ──
+        try:
+            wallet = self.wallet_instance(w)
+            swap_body = build_swap_body(q["ask_jetton_wallet"], q["min_ask_units"], w["address"])
+            if direction == "ton_to_usdt":
+                # TON уходит на pTON-кошелёк роутера обычным jetton-transfer'ом,
+                # value = сумма обмена + forward-газ (как в SDK PtonV1)
+                pton_wallet = q["offer_jetton_wallet"] or q["pton_wallet"]
+                if not pton_wallet:
+                    raise SwapError(tr("биржа не вернула адрес pTON-кошелька"))
+                body = build_jetton_transfer_body(
+                    amount=units, destination=q["router"], response_to=None,
+                    forward_ton=q["forward_gas"], forward_payload=swap_body,
+                )
+                dest, value = Address(pton_wallet), units + q["forward_gas"]
+            else:
+                # USDT уходит с нашего jetton-кошелька на роутер, газ — из value
+                jetton_wallet = w.get("usdt_wallet")
+                if not jetton_wallet:
+                    jw = await get_wallet_address_get_method(
+                        client=self.client,
+                        address=Address(USDT_MASTER),
+                        owner_address=Address(w["address"]),
+                    )
+                    jetton_wallet = jw.to_str()
+                    w["usdt_wallet"] = jetton_wallet
+                    self.save()
+                body = build_jetton_transfer_body(
+                    amount=units, destination=q["router"], response_to=w["address"],
+                    forward_ton=q["forward_gas"], forward_payload=swap_body,
+                )
+                dest, value = Address(jetton_wallet), q["gas_budget"]
+            msg = await wallet.transfer(destination=dest, amount=value, body=body)
+        except SwapError as exc:
+            self.set_flash(tr("ошибка обмена: {e}", e=exc), ok=False)
+            return
+        except Exception as exc:
+            self.set_flash(tr("ошибка обмена: {e}", e=str(exc)[:60]), ok=False)
+            return
+
+        rows = [
+            tr("  Обмен отправлен: {a} {s} → ≈ {b} {d}", a=give, s=src, b=get_, d=dst),
+            f"  {tr('Кошелёк:')}  {w['name']}",
+            "",
+            "  hash:  " + paint(getattr(msg, "normalized_hash", "—"), C.CYAN),
+            "  " + explorer_link("address", w["address"]),
+            "",
+            paint(tr("  DEX исполнит обмен за 10–60 секунд; монеты придут на этот же кошелёк."), C.GREY),
+            paint(tr("  Если цена уйдёт ниже минимума — средства вернутся автоматически."), C.GREY),
+        ]
+        self.ui.page(tr("обмен отправлен"), rows, status=paint(tr("✔ сообщение принято сетью"), C.LIME))
+        self.set_flash(tr("обмен отправлен с {name}", name=w["name"]))
+        if confirm(tr("обновить баланс кошелька сейчас?")):
+            await asyncio.sleep(12)
+            await self.refresh_wallets([idx])
 
     # ---------- экспорт / импорт ----------
     def screen_export(self):
